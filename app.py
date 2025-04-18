@@ -82,7 +82,7 @@ Implementation Details:
      * Direct image reconstruction
      * No text conditioning
      * Frozen during inference
-   
+
    - UNet training:
      * Noise prediction in latent space
      * Text conditioning via TrOCR
@@ -178,13 +178,13 @@ Key Concepts for Beginners:
 --------------------------
 - Diffusion Models: Think of these as models that learn to gradually clean up noise
   into meaningful images. Like slowly revealing a picture through fog.
-  
+
 - Latent Space: A compressed representation of images where the model works.
   Similar to how a jpeg compresses an image, but optimized for AI operations.
-  
+
 - Masks: Like stencils in painting, they tell the model which parts of the image
   to modify and which to leave unchanged.
-  
+
 - Guidance: The process of telling the model what kind of text to generate.
   Similar to having a reference while drawing.
 
@@ -216,7 +216,7 @@ Note: The quality of results can depend on factors like:
 
 TrOCR-UNet Integration:
 ----------------------
-The system integrates TrOCR embeddings with the UNet through a sophisticated 
+The system integrates TrOCR embeddings with the UNet through a sophisticated
 cross-attention mechanism:
 
 1. Text Feature Extraction:
@@ -653,19 +653,19 @@ def draw_text(im_shape, text):
         ValueError: If the font file is not found or text rendering fails.
     """
     # Set font parameters
-    font_size = 40  
+    font_size = 40
     font_file = "arialuni.ttf"
     len_text = len(text) if len(text) > 0 else 3
 
     # Create white background image
     img = Image.new("RGB", ((len_text + 2) * font_size, 60), color="white")
-    
+
     # Load font and draw text
     font = ImageFont.truetype(font_file, font_size)
     pos = (40, 10)
     draw = ImageDraw.Draw(img)
     draw.text(pos, text, font=font, fill="black")
-    
+
     return np.array(img)
 
 
@@ -713,7 +713,7 @@ def generate_mask(im_shape, ocr_locate):
     # Create empty mask
     mask = Image.new("L", im_shape, 0)
     draw = ImageDraw.Draw(mask)
-    
+
     # Draw rectangle for text region
     draw.rectangle(
         (ocr_locate[0], ocr_locate[1], ocr_locate[2], ocr_locate[3]),
@@ -769,7 +769,9 @@ def download_oss_file_pcache(my_file="xxx"):
     pass
 
 
-def get_full_repo_name(model_id: str, organization: Optional[str] = None, token: Optional[str] = None):
+def get_full_repo_name(
+    model_id: str, organization: Optional[str] = None, token: Optional[str] = None
+):
     """
     Constructs the full repository name for Hugging Face Hub.
 
@@ -816,7 +818,7 @@ def numpy_to_pil(images):
     if images.ndim == 3:
         images = images[None, ...]
     images = (images * 255).round().astype("uint8")
-    
+
     if images.shape[-1] == 1:
         # Handle grayscale images
         pil_images = [Image.fromarray(image.squeeze(), mode="L") for image in images]
@@ -847,7 +849,7 @@ def tensor2im(input_image, imtype=np.uint8):
             image_tensor = input_image.data
         else:
             return input_image
-        
+
         # Convert tensor to numpy and process
         image_numpy = image_tensor[0].cpu().float().numpy()
         if image_numpy.shape[0] == 1:
@@ -855,11 +857,11 @@ def tensor2im(input_image, imtype=np.uint8):
         image_numpy = (np.transpose(image_numpy, (1, 2, 0)) + 1) / 2.0 * 255.0
     else:
         image_numpy = input_image
-        
+
     return image_numpy.astype(imtype)
 
 
-from typing import List, Optional, Tuple, Union
+from typing import Optional
 
 
 def randn_tensor(
@@ -1133,15 +1135,15 @@ else:
 def text_editing(text, instance_image, slider_step, x0, y0, x1, y1):
     """
     Main text editing pipeline that generates edited image with new text.
-    
+
     This function demonstrates how the trained VAE and UNet work together:
-    
+
     1. VAE's Role (AutoencoderKL):
        - Converts high-dimensional images (H×W×3) to low-dimensional latents (h×w×4)
        - Typically reduces spatial dimensions by factor of 8 (vae_scale_factor)
        - Helps maintain global image structure during editing
        - Uses deterministic encoding during inference
-    
+
     2. UNet's Role:
        - Works in the latent space created by VAE
        - Performs denoising steps guided by:
@@ -1149,27 +1151,27 @@ def text_editing(text, instance_image, slider_step, x0, y0, x1, y1):
          * Masked image information
          * Original image context
        - Progressive refinement through multiple steps
-    
+
     3. Diffusion Process:
        - Starts with pure noise in the text region
        - Each step gradually denoises and refines the text
        - Uses noise_scheduler to manage the denoising schedule
        - Number of steps controlled by slider_step parameter
-    
+
     4. Text Conditioning:
        - TrOCR generates embeddings from target text
        - These embeddings guide the UNet's generation
        - Helps maintain text style and appearance
-    
+
     Training Background:
     -------------------
     The models used here were trained in two stages:
-    
+
     1. VAE Training:
        - Trained to minimize reconstruction loss
        - Learned to create efficient latent representations
        - Now frozen and used only for encoding/decoding
-    
+
     2. UNet Training:
        - Trained on progressively noised images
        - Learned to predict and remove noise
@@ -1427,8 +1429,8 @@ def text_editing(text, instance_image, slider_step, x0, y0, x1, y1):
 ROI_coordinates = {
     "x_temp": 0,  # Temporary x coordinate
     "y_temp": 0,  # Temporary y coordinate
-    "x_new": 0,   # New x coordinate from click
-    "y_new": 0,   # New y coordinate from click
+    "x_new": 0,  # New x coordinate from click
+    "y_new": 0,  # New y coordinate from click
     "clicks": 0,  # Click counter for ROI selection
 }
 
@@ -1513,7 +1515,7 @@ def get_select_coordinates(img, x0, y0, x1, y1, evt: gr.SelectData):
 # Initialize Gradio interface with components
 with gr.Blocks() as demo:
     gr.Markdown("DiffUTE: Universal Text Editing Diffusion Model")
-    
+
     # Main text editing interface tab
     with gr.Tab("Text editing pipeline"):
         with gr.Row():
@@ -1526,14 +1528,14 @@ with gr.Blocks() as demo:
                     label="ROI", color_map={"Click second point for ROI": "#f44336"}
                 )
                 button = gr.Button("Generate", variant="primary")
-                
+
                 # Coordinate display
                 with gr.Row():
                     x0 = gr.Number(label="X0")
                     x1 = gr.Number(label="X1")
                     y0 = gr.Number(label="Y0")
                     y1 = gr.Number(label="Y1")
-                
+
                 # Example configurations for demonstration
                 text_edit_examples = [
                     [
@@ -1577,7 +1579,7 @@ with gr.Blocks() as demo:
                         "640",
                     ],
                 ]
-                
+
                 # Inference step slider
                 ute_steps = gr.Slider(
                     20.0,

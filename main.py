@@ -12,6 +12,7 @@ The system consists of two main components:
 For detailed usage instructions, please refer to the README.md file.
 """
 
+
 def main():
     """
     Main entry point for the DiffUTE application.
