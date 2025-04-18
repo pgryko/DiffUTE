@@ -1132,6 +1132,52 @@ else:
 
 def text_editing(text, instance_image, slider_step, x0, y0, x1, y1):
     """
+    Main text editing pipeline that generates edited image with new text.
+    
+    This function demonstrates how the trained VAE and UNet work together:
+    
+    1. VAE's Role (AutoencoderKL):
+       - Converts high-dimensional images (H×W×3) to low-dimensional latents (h×w×4)
+       - Typically reduces spatial dimensions by factor of 8 (vae_scale_factor)
+       - Helps maintain global image structure during editing
+       - Uses deterministic encoding during inference
+    
+    2. UNet's Role:
+       - Works in the latent space created by VAE
+       - Performs denoising steps guided by:
+         * Text embeddings from TrOCR
+         * Masked image information
+         * Original image context
+       - Progressive refinement through multiple steps
+    
+    3. Diffusion Process:
+       - Starts with pure noise in the text region
+       - Each step gradually denoises and refines the text
+       - Uses noise_scheduler to manage the denoising schedule
+       - Number of steps controlled by slider_step parameter
+    
+    4. Text Conditioning:
+       - TrOCR generates embeddings from target text
+       - These embeddings guide the UNet's generation
+       - Helps maintain text style and appearance
+    
+    Training Background:
+    -------------------
+    The models used here were trained in two stages:
+    
+    1. VAE Training:
+       - Trained to minimize reconstruction loss
+       - Learned to create efficient latent representations
+       - Now frozen and used only for encoding/decoding
+    
+    2. UNet Training:
+       - Trained on progressively noised images
+       - Learned to predict and remove noise
+       - Conditioned on text embeddings for guidance
+       - Uses masked regions for targeted editing
+
+
+
     Performs text editing in an image using the DiffUTE model.
 
     This function takes an input image and coordinates of a text region, and replaces
