@@ -1,4 +1,7 @@
+Fork of original DiffUTE code, added comments and restructured code for better understanding and readability
+
 # DiffUTE
+
 This repository is the code of our NeurIPS'23 paper "DiffUTE: Universal Text Editing Diffusion Model". 
 
 :tada::tada::tada: We have reproduced our method using the AnyText dataset, and the weights can be downloaded at the [URL](https://modelscope.cn/models/cccnju/DiffUTE_SD2_Inp/summary). This checkpoint can be load for a [demo](https://github.com/chenhaoxing/DiffUTE/blob/main/app.ipynb).
