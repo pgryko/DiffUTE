@@ -19,6 +19,41 @@ Key functionalities:
 - Handles gradient accumulation, gradient checkpointing, and mixed-precision training.
 - Saves training checkpoints periodically.
 - Supports resuming training from checkpoints.
+
+Training Process:
+---------------
+1. Data Preparation:
+   - Images are loaded from Minio storage
+   - Resized and preprocessed to target resolution
+   - Converted to tensors in range [-1, 1]
+
+2. Model Setup:
+   - VAE is initialized from pretrained weights
+   - Training configuration (learning rate, batch size, etc.) is set via command line args
+   - Optimizer and learning rate scheduler are configured
+
+3. Training Loop:
+   - For each epoch:
+     * Load batch of images
+     * Encode images to latent space
+     * Decode back to image space
+     * Calculate reconstruction loss (MSE)
+     * Update VAE parameters
+     * Log progress and save checkpoints
+
+4. Output:
+   - Trained VAE model is saved periodically
+   - Can be used later for the full DiffUTE pipeline
+
+Usage:
+------
+python train_vae.py
+    --pretrained_model_name_or_path <path_to_model>
+    --output_dir <output_directory>
+    --resolution 512
+    --train_batch_size 16
+    --num_train_epochs 100
+    --learning_rate 1e-4
 """
 from pcache_fileio import fileio
 from pcache_fileio.oss_conf import OssConfigFactory
@@ -77,6 +112,19 @@ torch.cuda.empty_cache()
 
 
 def parse_args():
+    """
+    Parse command line arguments for VAE training.
+
+    Returns:
+        argparse.Namespace: Parsed arguments including:
+            - pretrained_model_name_or_path: Path to pretrained model
+            - output_dir: Directory for saving checkpoints
+            - resolution: Target image resolution
+            - train_batch_size: Batch size per GPU
+            - num_train_epochs: Total number of training epochs
+            - learning_rate: Initial learning rate
+            And many other training configuration parameters
+    """
     parser = argparse.ArgumentParser(description="Simple example of a training script.")
     parser.add_argument(
         "--pretrained_model_name_or_path",
@@ -535,6 +583,31 @@ def tensor2im(input_image, imtype=np.uint8):
 
 
 def main():
+    """
+    Main training loop for the VAE model.
+
+    This function:
+    1. Sets up the training environment:
+       - Initializes accelerator for distributed training
+       - Loads the VAE model and freezes other components
+       - Configures optimizer and learning rate scheduler
+       - Sets up data loading and preprocessing
+
+    2. Implements the training loop:
+       - Processes batches of images
+       - Calculates reconstruction loss
+       - Updates model parameters
+       - Handles checkpointing and logging
+
+    3. Manages training state:
+       - Supports resuming from checkpoints
+       - Tracks and logs metrics
+       - Saves model periodically
+
+    The training focuses on minimizing the reconstruction loss,
+    which measures how well the VAE can encode and decode images
+    while maintaining their visual quality and features.
+    """
     args = parse_args()
     if args.non_ema_revision is not None:
         deprecate(
@@ -591,7 +664,7 @@ def main():
             else:
                 repo_name = args.hub_model_id
             create_repo(repo_name, exist_ok=True, token=args.hub_token)
-            repo = Repository(
+            Repository(
                 args.output_dir, clone_from=repo_name, token=args.hub_token
             )
 
@@ -815,12 +888,10 @@ def main():
     )
     progress_bar.set_description("Steps")
 
-    guidance_scale = args.guidance_scale
     for epoch in range(first_epoch, args.num_train_epochs):
         print("Epoch: " + str(epoch))
         vae.train()
         train_loss = 0.0
-        count = 0
         for step, batch in enumerate(train_dataloader):
             # Skip steps until we reach the resumed step
             if (

@@ -1,3 +1,104 @@
+"""
+DiffUTE (Diffusion Universal Text Editor) Training Script
+
+This script implements the training process for the DiffUTE model, which is designed
+to edit text in images while preserving the surrounding context. The model combines
+a pre-trained VAE with a UNet-based diffusion model and TrOCR for text understanding.
+
+Architecture Overview:
+--------------------
+1. VAE (Variational AutoEncoder):
+   - Pre-trained and frozen during this training
+   - Handles image encoding/decoding
+   - Reduces computational complexity by working in latent space
+   - Converts images between pixel space (H×W×3) and latent space (h×w×4)
+
+2. UNet:
+   - Main component being trained
+   - Performs denoising in latent space
+   - Conditioned on text embeddings from TrOCR
+   - Takes concatenated input of:
+     * Noisy latents
+     * Binary mask
+     * Masked image latents
+
+3. TrOCR:
+   - Pre-trained text recognition model
+   - Provides text embeddings for conditioning
+   - Frozen during training
+   - Helps guide the text generation process
+
+Training Process:
+---------------
+1. Data Preparation:
+   - Original images are encoded to latent space using VAE
+   - Text regions are masked
+   - Target text is rendered and processed by TrOCR
+   - All inputs are normalized to [-1, 1] range
+
+2. Forward Diffusion:
+   - Add random noise to latent representations
+   - Sample random timesteps for each batch
+   - Apply noise schedule based on timesteps
+   - Create noisy versions of the input
+
+3. Reverse Diffusion Training:
+   - UNet learns to predict noise or velocity
+   - Guided by:
+     * Text embeddings from TrOCR
+     * Masked regions indicating edit areas
+     * Original image context
+   - Uses MSE loss between predictions and targets
+
+4. Conditioning Strategy:
+   - Text embeddings provide semantic guidance
+   - Masks ensure localized editing
+   - Original context helps maintain image coherence
+
+Key Features:
+-----------
+1. Multi-modal Integration:
+   - Combines image and text understanding
+   - Uses cross-attention for text conditioning
+   - Maintains spatial awareness through masks
+
+2. Controlled Generation:
+   - Precise text region targeting
+   - Context preservation outside edit areas
+   - Style-aware text generation
+
+3. Training Optimizations:
+   - Mixed precision training
+   - Gradient accumulation
+   - Distributed training support
+   - Checkpoint management
+
+Usage:
+------
+python train_diffute_v1.py
+    --pretrained_model_name_or_path <path>
+    --output_dir <dir>
+    --train_batch_size 16
+    --num_train_epochs 100
+    --learning_rate 1e-4
+
+Dependencies:
+------------
+- PyTorch: Deep learning framework
+- Diffusers: Diffusion model implementation
+- Transformers: For TrOCR model
+- Accelerate: Distributed training support
+- Albumentations: Image augmentation
+
+Notes:
+-----
+- The VAE must be pre-trained and frozen
+- TrOCR is used in inference mode only
+- Training requires significant GPU memory
+- Batch size may need adjustment based on available memory
+- Learning rate scheduling is critical for stability
+"""
+
 from pcache_fileio import fileio
 from pcache_fileio.oss_conf import OssConfigFactory
 import pandas as pd
@@ -414,6 +515,16 @@ def draw_text(im_shape, text):
 
 
 def process_location(location, instance_image_size):
+    """
+    Process and adjust text region coordinates to include padding.
+
+    Args:
+        location (list): [x0, y0, x1, y1] coordinates of text region
+        instance_image_size (tuple): (height, width) of the image
+
+    Returns:
+        list: Adjusted coordinates with added padding
+    """
     h = location[3] - location[1]
     location[3] = min(location[3] + h / 10, instance_image_size[0] - 1)
     return location
@@ -431,10 +542,19 @@ def generate_mask(im_shape, ocr_locate):
 
 
 def prepare_mask_and_masked_image(image, mask):
+    """
+    Create a masked version of the input image.
+
+    Args:
+        image (numpy.ndarray): Input image array (H, W, C)
+        mask (numpy.ndarray): Binary mask array (H, W)
+
+    Returns:
+        numpy.ndarray: Image with masked region set to 0
+    """
     masked_image = np.multiply(
         image, np.stack([mask < 0.5, mask < 0.5, mask < 0.5]).transpose(1, 2, 0)
     )
-
     return masked_image
 
 
@@ -596,45 +716,75 @@ def get_full_repo_name(
 
 def numpy_to_pil(images):
     """
-    Convert a numpy image or a batch of images to a PIL image.
+    Convert numpy image arrays to PIL images.
+
+    Args:
+        images (numpy.ndarray): Image array(s) in range [0, 1]
+
+    Returns:
+        list[PIL.Image]: List of PIL images
     """
     if images.ndim == 3:
         images = images[None, ...]
     images = (images * 255).round().astype("uint8")
     if images.shape[-1] == 1:
-        # special case for grayscale (single channel) images
         pil_images = [Image.fromarray(image.squeeze(), mode="L") for image in images]
     else:
         pil_images = [Image.fromarray(image) for image in images]
-
     return pil_images
 
 
 def tensor2im(input_image, imtype=np.uint8):
-    """ "Converts a Tensor array into a numpy image array.
-    Parameters:
-        input_image (tensor) --  the input image tensor array
-        imtype (type)        --  the desired type of the converted numpy array
+    """
+    Convert a tensor to a numpy image array.
+
+    Args:
+        input_image (torch.Tensor or numpy.ndarray): Input image
+        imtype (type): Desired output numpy dtype
+
+    Returns:
+        numpy.ndarray: Processed image array
     """
     if not isinstance(input_image, np.ndarray):
-        if isinstance(input_image, torch.Tensor):  # get the data from a variable
+        if isinstance(input_image, torch.Tensor):
             image_tensor = input_image.data
         else:
             return input_image
-        image_numpy = (
-            image_tensor[0].cpu().float().numpy()
-        )  # convert it into a numpy array
-        if image_numpy.shape[0] == 1:  # grayscale to RGB
+        image_numpy = image_tensor[0].cpu().float().numpy()
+        if image_numpy.shape[0] == 1:
             image_numpy = np.tile(image_numpy, (3, 1, 1))
-        image_numpy = (
-            (np.transpose(image_numpy, (1, 2, 0)) + 1) / 2.0 * 255.0
-        )  # post-processing: tranpose and scaling
-    else:  # if it is a numpy array, do nothing
+        image_numpy = (np.transpose(image_numpy, (1, 2, 0)) + 1) / 2.0 * 255.0
+    else:
         image_numpy = input_image
     return image_numpy.astype(imtype)
 
 
 def main():
+    """
+    Main training function for the DiffUTE model.
+
+    This function implements the core training loop:
+    1. Setup Phase:
+       - Initialize models (VAE, UNet, TrOCR)
+       - Configure training (optimizer, scheduler, etc.)
+       - Prepare data loading
+
+    2. Training Loop:
+       - Process batches of images and text
+       - Generate noise and conditioning
+       - Train UNet for denoising
+       - Track and log progress
+
+    3. Model Management:
+       - Save checkpoints
+       - Handle distributed training
+       - Monitor training metrics
+
+    The training process focuses on teaching the UNet to:
+    - Understand text through TrOCR embeddings
+    - Denoise effectively in masked regions
+    - Maintain image context outside text areas
+    """
     args = parse_args()
 
     if args.non_ema_revision is not None:
@@ -690,7 +840,7 @@ def main():
             else:
                 repo_name = args.hub_model_id
             create_repo(repo_name, exist_ok=True, token=args.hub_token)
-            repo = Repository(
+            Repository(
                 args.output_dir, clone_from=repo_name, token=args.hub_token
             )
 
@@ -987,6 +1137,7 @@ def main():
                     progress_bar.update(1)
                 continue
 
+            # Process text with TrOCR for conditioning
             pixel_values = processor(
                 images=batch["ttf_images"], return_tensors="pt"
             ).pixel_values
@@ -995,14 +1146,16 @@ def main():
             ocr_embeddings = ocr_feature.last_hidden_state
 
             with accelerator.accumulate(unet):
-                # Convert images to latent space
+                # Convert images to latent space using frozen VAE
                 latents = vae.encode(
                     batch["pixel_values"].to(weight_dtype)
                 ).latent_dist.sample()
                 latents = latents * vae.config.scaling_factor
+
+                # Generate random noise for diffusion
                 noise = torch.randn_like(latents)
 
-                # Rex: prepare mask && mask latent as input of UNET
+                # Prepare mask and masked latents
                 width, height, *_ = batch["masks"].size()[::-1]
                 mask = torch.nn.functional.interpolate(
                     batch["masks"],
@@ -1012,14 +1165,14 @@ def main():
                 )
                 mask = mask.to(weight_dtype)
 
+                # Get masked image latents
                 masked_image_latents = vae.encode(
                     batch["masked_images"].to(weight_dtype)
                 ).latent_dist.sample()
                 masked_image_latents = masked_image_latents * vae.config.scaling_factor
 
-                # Sample noise that we'll add to the latents
+                # Sample timesteps and add noise
                 bsz = latents.shape[0]
-                # Sample a random timestep for each image
                 timesteps = torch.randint(
                     0,
                     noise_scheduler.num_train_timesteps,
@@ -1027,16 +1180,12 @@ def main():
                     device=latents.device,
                 )
                 timesteps = timesteps.long()
-
-                # Add noise to the latents according to the noise magnitude at each timestep
-                # (this is the forward diffusion process)
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
-                # Get the text embedding for conditioning
+                # Get text embeddings for conditioning
                 encoder_hidden_states = ocr_embeddings.detach()
 
-                # Get the target for loss depending on the prediction type
-                # Rex这边的这么搞:why train_dreambooth_inpaint.py target就是latent+noise
+                # Determine target based on prediction type
                 if noise_scheduler.config.prediction_type == "epsilon":
                     target = noise
                 elif noise_scheduler.config.prediction_type == "v_prediction":
@@ -1046,24 +1195,22 @@ def main():
                         f"Unknown prediction type {noise_scheduler.config.prediction_type}"
                     )
 
-                # Predict the noise residual and compute loss
+                # Combine inputs for UNet
                 model_input_latents = torch.cat(
                     [noisy_latents, mask, masked_image_latents], dim=1
                 )
+
+                # Get model prediction
                 model_pred = unet(
                     model_input_latents, timesteps, encoder_hidden_states
                 ).sample
 
-                # condintional noise pred的过程
-                # model_pred_uncond, model_pred_cond = model_pred.chunk(2)
-                # model_pred = model_pred_uncond + guidance_scale * (model_pred_cond - model_pred_uncond)
+                # Calculate loss and update model
                 loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
-
-                # Gather the losses across all processes for logging (if we use distributed training).
                 avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
                 train_loss += avg_loss.item() / args.gradient_accumulation_steps
 
-                # Backpropagate
+                # Optimization step
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:
                     accelerator.clip_grad_norm_(unet.parameters(), args.max_grad_norm)
